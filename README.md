@@ -1,6 +1,6 @@
 # 斗地主
 
-单机版斗地主：你和两个电脑对战。用 Python + pygame 写成，所有音效都由程序现场合成，不需要任何图片或声音素材文件。
+单机版斗地主：你和两个电脑对战。用 Python + pygame 写成。人物和牌桌背景由 ChatGPT 生成，音效由程序现场合成。
 
 ![牌桌](docs/table.png)
 
@@ -25,13 +25,15 @@
   电脑只用公开信息（自己的手牌、已出的牌、各家剩余张数、亮出的底牌），不会偷看你的牌。
   自我对战测试（同一副牌交换角色各打一次以抵消手气）：普通比简单的地主胜率高约 14 个百分点，困难比普通再高约 30 个百分点。
 
+- **人物形象和动作**：地主、农民小伙、农民姑娘三个 Q 版人物，叫完分后按身份换装；出牌时有甩牌动作，赢了欢呼、输了抹眼泪，平时有呼吸起伏，轮到谁谁脚下发光
+- **牌桌背景**：默认绿色，内置红木、绒布、庭院三张，也可以选自己电脑里的任意图片
 - **记牌器**：显示另外两家每种牌还剩几张，可能有炸弹/王炸的会标红
 - **智能划选**：按住鼠标划过一串牌，自动挑出顺子/连对/飞机（例如划过 `334567` 选中 `34567`）；跟牌时会挑出最小的、能管上的同型牌；再划一次全部落下
 - **提示按钮**：一键提示可出的牌，多按几次换一种；要不起时只显示一个「不出」
 - **动画和音效**：发牌、出牌飞牌、底牌翻开、炸弹震屏和火花、胜利彩带
-- **菜单和设置**：主菜单、Esc 暂停菜单；可调音量、电脑难度、显示模式（窗口化 / 全屏窗口化 / 全屏），设置自动保存
+- **菜单和设置**：主菜单、Esc 暂停菜单；可调音量、电脑难度、显示模式（窗口化 / 全屏窗口化 / 全屏）、牌桌背景，设置自动保存
 
-![主菜单](docs/cover.png)
+![设置](docs/settings.png)
 
 ## 操作
 
@@ -57,7 +59,7 @@ Windows 下也可以直接双击 `start.bat`。
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed --name doudizhu main.py
+pyinstaller --onefile --windowed --name doudizhu --add-data "assets;assets" main.py
 ```
 
 ## 文件结构
@@ -69,7 +71,20 @@ pyinstaller --onefile --windowed --name doudizhu main.py
 | `rules.py` | 规则：牌型识别、大小比较、可出牌枚举 |
 | `ai.py` | 难度分发、简单难度的策略、提示和智能划选 |
 | `ai_hard.py` | 普通/困难难度：动态规划拆牌、记牌、蒙特卡洛搜索 |
+| `characters.py` | 人物：加载动作图、按身份选形象、动作动画 |
+| `backgrounds.py` | 牌桌背景：预设、自选图片导入 |
 | `sounds.py` | 用 numpy 合成的音效 |
+| `assets/` | 人物动作图和背景图 |
+| `tools/make_assets.py` | 把 AI 生成的原图加工成游戏素材（抠图、切帧、对齐脚底、裁背景） |
+
+## 素材
+
+`assets/` 里的人物和背景是用 ChatGPT 按描述生成的原创图片：每个人物一张图里画 4 个动作（待机、出牌、胜利、失败），再用 `tools/make_assets.py` 切成帧。想换人物或背景，生成新图后运行：
+
+```bash
+python tools/make_assets.py sheet 原图.png assets/characters/landlord.png
+python tools/make_assets.py bg 原图.png assets/backgrounds/redwood.jpg
+```
 
 ## 说明
 

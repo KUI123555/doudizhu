@@ -7,6 +7,7 @@ from collections import Counter
 
 import pygame
 
+from characters import Sprites, pose_transform
 from ai import LEVELS, ai_play, choose_bid, choose_play, hint_options, smart_pick
 from rules import (RANK_NAMES, SUITS, analyze, can_beat, new_deck, remove_cards,
                    sort_cards)
@@ -17,8 +18,10 @@ BIG = (90, 126)
 SMALL = (64, 90)
 FPS = 60
 
-AVATAR = {0: (70, H - 130), 1: (W - 75, 215), 2: (75, 215)}
-STACK_X = {1: W - 204, 2: 140}
+CHAR_H = 200                                        # 人物显示高度
+FEET = {0: (85, H - 50), 1: (W - 85, 365), 2: (85, 365)}   # 人物脚底位置
+AVATAR = {p: (x, y - 110) for p, (x, y) in FEET.items()}   # 人物胸口（出牌从这里飞出）
+STACK_X = {1: W - 234, 2: 170}
 STACK_Y = 150
 DECK_POS = (W // 2 - 32, 230)
 NAMES = ['我', '电脑甲', '电脑乙']
@@ -219,6 +222,7 @@ class Game:
         self.back = {BIG: render_back(*BIG), SMALL: render_back(*SMALL)}
         self.shadow = {BIG: render_shadow(*BIG), SMALL: render_shadow(*SMALL)}
         self.faces = {}
+        self.sprites = Sprites(CHAR_H)
         self.scores = [0, 0, 0]
         self.toasts, self.particles, self.flyers = [], [], []
         self.shake_t0 = self.flash_t0 = -10
@@ -279,6 +283,10 @@ class Game:
         self.next_ai = 0
         self.new_ids, self.new_ids_until = set(), 0
         self.flyers = []
+        self.pose = ['idle'] * 3
+        self.pose_t0 = [0.0] * 3
+        self.pose_until = [None] * 3
+        self.role_t0 = -10.0
 
     def deal_target(self, p):
         if p == 0:
@@ -328,6 +336,9 @@ class Game:
         if L == 0:
             self.new_ids = {c.id for c in self.bottom}
             self.new_ids_until = t + 3.0
+        self.role_t0 = t
+        fx, fy = FEET[L]
+        self.sparkle(fx, fy - CHAR_H * 0.55)
         self.snd.play('deal')
 
     def start_playing(self):
@@ -384,19 +395,39 @@ class Game:
             self.do_pass(p)
         return True
 
+    def set_pose(self, p, pose, dur=None):
+        """切换人物动作；dur 秒后回到待机，None 表示一直保持。"""
+        self.pose[p] = pose
+        self.pose_t0[p] = now()
+        self.pose_until[p] = None if dur is None else now() + dur
+
+    def roles_known(self):
+        return self.landlord is not None and (self.state != 'reveal' or self.bottom_given)
+
+    def char_name(self, p):
+        """地主用地主形象，两个农民一男一女。叫完分前大家都是农民打扮：
+        我是小伙，两个电脑是姑娘（左右各一个，不会同一边出现两个一样的人）。"""
+        if not self.roles_known():
+            return ('farmer_m', 'farmer_f', 'farmer_f')[p]
+        if p == self.landlord:
+            return 'landlord'
+        if self.landlord == 0:
+            return 'farmer_m' if p == 1 else 'farmer_f'
+        return 'farmer_m' if p == 0 else 'farmer_f'
+
     def display_layout(self, p, n):
         sp = 28
         total = (n - 1) * sp + SMALL[0]
         if p == 0:
             x0, y = W / 2 - total / 2, 385
         elif p == 2:
-            x0, y = 235, 200
+            x0, y = 250, 200
         else:
-            x0, y = W - 235 - total, 200
+            x0, y = W - 250 - total, 200
         return [(x0 + i * sp, y) for i in range(n)]
 
     def display_center(self, p):
-        return {0: (W / 2, 430), 1: (W - 330, 245), 2: (330, 245)}[p]
+        return {0: (W / 2, 430), 1: (W - 345, 245), 2: (345, 245)}[p]
 
     def do_play(self, p, cards):
         pat = analyze(cards)
@@ -417,6 +448,7 @@ class Game:
         self.last = (pat, p)
         self.passes = 0
         self.play_count[p] += 1
+        self.set_pose(p, 'play', 0.75)
         if p == 0:
             self.selected.clear()
         cx, cy = self.display_center(p)
@@ -502,6 +534,16 @@ class Game:
             self.particles.append({'x': x, 'y': y, 'vx': math.cos(a) * sp, 'vy': math.sin(a) * sp - 120,
                                    'life': life, 'max': life, 'color': random.choice(colors),
                                    'size': random.uniform(3, 7), 'g': 500, 'rect': False})
+
+    def sparkle(self, x, y):
+        colors = [(255, 230, 120), (255, 200, 60), (255, 255, 220)]
+        for _ in range(40):
+            a = random.uniform(0, math.tau)
+            sp = random.uniform(60, 220)
+            life = random.uniform(0.4, 0.9)
+            self.particles.append({'x': x, 'y': y, 'vx': math.cos(a) * sp, 'vy': math.sin(a) * sp - 60,
+                                   'life': life, 'max': life, 'color': random.choice(colors),
+                                   'size': random.uniform(2, 5), 'g': 200, 'rect': False})
 
     def confetti(self):
         colors = [(255, 90, 90), (255, 210, 60), (90, 200, 255), (130, 240, 120), (240, 130, 255)]
@@ -707,6 +749,8 @@ class Game:
         elif self.state == 'ending':
             if t >= self.end_t:
                 self.state = 'over'
+                for q in range(3):
+                    self.set_pose(q, 'win' if self.result['deltas'][q] > 0 else 'lose')
                 if self.result['win']:
                     self.snd.play('win')
                     self.confetti()
@@ -854,37 +898,69 @@ class Game:
             c.blit(img, (pos[0] + (SMALL[0] - w) / 2, pos[1]))
 
     def draw_player(self, c, p, t):
-        ax, ay = AVATAR[p]
         active = (self.state == 'bidding' and self.bid_turn == p) or (self.state == 'playing' and self.turn == p)
-        if active:
-            r = 44 + 3 * math.sin(t * 6)
-            pygame.draw.circle(c, (255, 220, 90), (ax, ay), int(r), 4)
-        pygame.draw.circle(c, (255, 255, 255), (ax, ay), 38)
-        pygame.draw.circle(c, AVATAR_COLOR[p], (ax, ay), 35)
-        blit_center(c, F(30, True).render(AVATAR_CHAR[p], True, (255, 255, 255)), (ax, ay))
-        if self.landlord is not None and self.state != 'reveal' or (self.state == 'reveal' and self.bottom_given):
+        n = len(self.hands[p])
+        if p != 0:
+            x = STACK_X[p]
+            if self.state == 'over':
+                for i, card in enumerate(self.hands[p]):
+                    self.draw_card(c, card, (x, STACK_Y + i * 22), SMALL)
+            else:
+                for i in range(n):
+                    self.draw_card(c, None, (x, STACK_Y + i * 16), SMALL, back=True)
+        if self.sprites.ok:
+            self.draw_character(c, p, t, active)
+            ax, label_y = FEET[p][0], FEET[p][1] + 14
+            badge_y = FEET[p][1] - CHAR_H - 6
+        else:
+            ax, ay = AVATAR[p]
+            if active:
+                r = 44 + 3 * math.sin(t * 6)
+                pygame.draw.circle(c, (255, 220, 90), (ax, ay), int(r), 4)
+            pygame.draw.circle(c, (255, 255, 255), (ax, ay), 38)
+            pygame.draw.circle(c, AVATAR_COLOR[p], (ax, ay), 35)
+            blit_center(c, F(30, True).render(AVATAR_CHAR[p], True, (255, 255, 255)), (ax, ay))
+            label_y, badge_y = ay + 52, ay - 46
+        if self.roles_known():
             is_l = p == self.landlord
             badge = pygame.Rect(0, 0, 50, 24)
-            badge.center = (ax, ay - 46)
+            badge.center = (ax, badge_y)
             pygame.draw.rect(c, (240, 180, 40) if is_l else (70, 160, 90), badge, border_radius=12)
             pygame.draw.rect(c, (255, 255, 255), badge, 2, border_radius=12)
             blit_center(c, F(15, True).render('地主' if is_l else '农民', True, (255, 255, 255)), badge.center)
-        blit_center(c, text_outline(NAMES[p], F(18, True), (255, 255, 255), (20, 40, 25), 1), (ax, ay + 52))
+        blit_center(c, text_outline(NAMES[p], F(18, True), (255, 255, 255), (20, 40, 25), 1), (ax, label_y))
         if p == 0:
             return
-        n = len(self.hands[p])
         col = (255, 90, 80) if 0 < n <= 2 else (255, 240, 200)
-        blit_center(c, text_outline(f'剩 {n} 张', F(17, True), col, (20, 40, 25), 1), (ax, ay + 76))
+        blit_center(c, text_outline(f'剩 {n} 张', F(17, True), col, (20, 40, 25), 1), (ax, label_y + 24))
         if active and self.state in ('playing', 'bidding'):
             dots = '.' * (int(t * 3) % 4)
-            c.blit(F(16).render('思考中' + dots, True, (230, 230, 230)), (ax - 26, ay + 92))
-        x = STACK_X[p]
-        if self.state == 'over':
-            for i, card in enumerate(self.hands[p]):
-                self.draw_card(c, card, (x, STACK_Y + i * 22), SMALL)
+            c.blit(F(16).render('思考中' + dots, True, (230, 230, 230)), (ax - 26, label_y + 40))
+
+    def draw_character(self, c, p, t, active):
+        fx, fy = FEET[p]
+        facing = -1 if p == 1 else 1                      # 右边的电脑朝左，其余朝右（都面向牌桌中间）
+        pose, age = self.pose[p], t - self.pose_t0[p]
+        if self.pose_until[p] is not None and t >= self.pose_until[p]:
+            pose, age = 'idle', 0.0
+        img = self.sprites.get(self.char_name(p), pose, facing < 0)
+        dx, dy, sx, sy = pose_transform(pose, age, t, p, facing)
+        ra = t - self.role_t0
+        if 0 <= ra < 0.45:                                # 换装时弹一下
+            pop = 1 + 0.22 * math.sin(math.pi * ra / 0.45)
+            sx, sy = sx * pop, sy * pop
+        shadow = pygame.Surface((130, 26), pygame.SRCALPHA)
+        if active:
+            glow = 150 + int(80 * math.sin(t * 6))
+            pygame.draw.ellipse(shadow, (255, 215, 80, glow), (0, 0, 130, 26))
+            pygame.draw.ellipse(shadow, (0, 0, 0, 60), (16, 5, 98, 16))
         else:
-            for i in range(n):
-                self.draw_card(c, None, (x, STACK_Y + i * 16), SMALL, back=True)
+            pygame.draw.ellipse(shadow, (0, 0, 0, 70), (10, 3, 110, 20))
+        c.blit(shadow, (fx - 65, fy - 13))
+        w, h = max(1, round(img.get_width() * sx)), max(1, round(img.get_height() * sy))
+        if (w, h) != img.get_size():
+            img = pygame.transform.smoothscale(img, (w, h))
+        c.blit(img, (fx + dx - w / 2, fy + dy - h))
 
     def draw_display(self, c, p, t):
         d = self.display[p]

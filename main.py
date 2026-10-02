@@ -1,4 +1,4 @@
-"""斗地主 —— 入口：主菜单、暂停菜单、设置（音量 / 难度 / 显示模式）。运行：python main.py"""
+"""斗地主 —— 入口：主菜单、暂停菜单、设置（音量 / 难度 / 显示模式 / 牌桌背景）。运行：python main.py"""
 import ctypes
 import ctypes.wintypes
 import json
@@ -8,6 +8,7 @@ import sys
 
 import pygame
 
+import backgrounds as BG
 import game as G
 from ai import LEVEL_TIPS, LEVELS
 from game import BIG, FPS, H, W, Button, F, Game, blit_center, mouse_pos, text_outline, to_logical
@@ -33,7 +34,7 @@ TEXT_DARK = (80, 60, 40)
 # ---------------- 设置 ----------------
 
 def load_settings():
-    s = {'volume': 0.8, 'display': 'windowed', 'difficulty': 'normal'}
+    s = {'volume': 0.8, 'display': 'windowed', 'difficulty': 'normal', 'background': 'default'}
     try:
         with open(SETTINGS_FILE, encoding='utf-8') as f:
             data = json.load(f)
@@ -43,6 +44,8 @@ def load_settings():
             s['display'] = data['display']
         if data.get('difficulty') in dict(LEVELS):
             s['difficulty'] = data['difficulty']
+        if data.get('background') in [k for k, _, _ in BG.PRESETS] + ['custom']:
+            s['background'] = data['background']
     except (OSError, ValueError, AttributeError):
         pass
     return s
@@ -148,6 +151,8 @@ class App:
         self.game = Game()
         self.game.snd.set_volume(self.settings['volume'])
         self.game.level = self.settings['difficulty']
+        self.default_bg = self.game.bg
+        self.apply_background()
         self.menu = 'main'          # 'main' 主菜单 / 'pause' 暂停 / 'settings' 设置 / None 游戏中
         self.settings_back = 'main'
         self.clock = pygame.time.Clock()
@@ -169,15 +174,22 @@ class App:
         ]
         self.btn_menu = Button('菜单', (W - 62, H - 34), (90, 100, 110), w=96, h=40)
 
-        self.set_rect = pygame.Rect(0, 0, 620, 540)
+        self.set_rect = pygame.Rect(0, 0, 620, 620)
         self.set_rect.center = (W // 2, H // 2)
         sx, sy = self.set_rect.topleft
-        self.slider = Slider(sx + 160, sy + 130, 320, self.settings['volume'])
-        self.level_btns = [(lv, Button(label, (sx + 130 + i * 180, sy + 225), (95, 105, 120), w=160, h=50))
+        self.slider = Slider(sx + 160, sy + 120, 320, self.settings['volume'])
+        self.level_btns = [(lv, Button(label, (sx + 130 + i * 180, sy + 205), (95, 105, 120), w=160, h=48))
                            for i, (lv, label) in enumerate(LEVELS)]
-        self.mode_btns = [(mode, Button(label, (sx + 130 + i * 180, sy + 355), (95, 105, 120), w=160, h=50))
+        self.mode_btns = [(mode, Button(label, (sx + 130 + i * 180, sy + 315), (95, 105, 120), w=160, h=48))
                           for i, (mode, label) in enumerate(DISPLAY_MODES)]
-        self.btn_back = Button('返回', (W // 2, sy + 480), (230, 120, 30), w=180, h=52)
+        keys = [k for k, _, _ in BG.PRESETS] + ['custom']
+        tw, gap = 104, 12
+        x0 = sx + (620 - (len(keys) * tw + (len(keys) - 1) * gap)) // 2
+        self.bg_tiles = [(k, pygame.Rect(x0 + i * (tw + gap), sy + 420, tw, 62)) for i, k in enumerate(keys)]
+        self.btn_pick = Button('更换图片', (sx + 528, sy + 392), (50, 130, 210), w=112, h=34)
+        self.bg_msg = None
+        self.make_thumbs()
+        self.btn_back = Button('返回', (W // 2, sy + 570), (230, 120, 30), w=180, h=52)
 
         self.cover_cards = [Card(i) for i in (42, 45, 48, 52, 53)]  # K♣ A♥ 2♠ 小王 大王
 
@@ -270,6 +282,18 @@ class App:
                         apply_display(mode)
                         save_settings(self.settings)
                     return
+            for key, rect in self.bg_tiles:
+                if rect.collidepoint(e.pos):
+                    self.game.snd.play('click')
+                    if key == 'custom' and 'custom' not in self.thumbs:
+                        self.pick_custom_background()
+                    else:
+                        self.choose_background(key)
+                    return
+            if 'custom' in self.thumbs and self.btn_pick.hit(e.pos):
+                self.game.snd.play('click')
+                self.pick_custom_background()
+                return
             if self.btn_back.hit(e.pos):
                 self.game.snd.play('click')
                 self.menu = self.settings_back
@@ -279,6 +303,44 @@ class App:
             self.slider.dragging = False
             self.game.snd.play('play')   # 试听
             save_settings(self.settings)
+
+    def apply_background(self):
+        self.game.bg = BG.load(self.settings['background'], HERE, (W, H), self.default_bg)
+
+    def make_thumbs(self):
+        self.thumbs = {}
+        for k, _, _ in BG.PRESETS:
+            self.thumbs[k] = pygame.transform.smoothscale(BG.load(k, HERE, (W, H), self.default_bg), (104, 62))
+        if BG.has_custom(HERE):
+            img = BG.load('custom', HERE, (W, H), None)
+            if img is not None:
+                self.thumbs['custom'] = pygame.transform.smoothscale(img, (104, 62))
+
+    def choose_background(self, key):
+        self.settings['background'] = key
+        self.apply_background()
+        save_settings(self.settings)
+
+    def pick_custom_background(self):
+        # 独占全屏时系统对话框会被挡住，先临时切成全屏窗口化
+        fullscreen = self.settings['display'] == 'fullscreen'
+        if fullscreen:
+            apply_display('borderless')
+        try:
+            path = BG.ask_image_file()
+        except Exception:
+            path = None
+        if fullscreen:
+            apply_display('fullscreen')
+        pygame.event.clear()
+        if not path:
+            return
+        if BG.import_custom(path, HERE, (W, H)):
+            self.make_thumbs()
+            self.choose_background('custom')
+            self.bg_msg = ('已换成你选的图片', (60, 140, 70), pygame.time.get_ticks() + 3000)
+        else:
+            self.bg_msg = ('这个文件读不出来，换一张图片试试', (200, 70, 50), pygame.time.get_ticks() + 3000)
 
     def set_volume(self, px):
         self.slider.set_from(px)
@@ -348,26 +410,51 @@ class App:
         rect = self.set_rect
         draw_panel(c, rect)
         sx, sy = rect.topleft
-        blit_center(c, F(34, True).render('设 置', True, TEXT_DARK), (W / 2, sy + 50))
-        lab = F(22, True)
-        c.blit(lab.render('音量', True, TEXT_DARK), (sx + 60, sy + 114))
+        blit_center(c, F(34, True).render('设 置', True, TEXT_DARK), (W / 2, sy + 48))
+        lab, tip = F(22, True), F(16)
+        tip_col = (140, 120, 100)
+        c.blit(lab.render('音量', True, TEXT_DARK), (sx + 60, sy + 104))
         self.slider.draw(c, mouse)
-        c.blit(F(21, True).render(f'{round(self.slider.value * 100)}%', True, (200, 100, 30)), (sx + 505, sy + 115))
-        tip = F(16)
-        c.blit(lab.render('电脑难度', True, TEXT_DARK), (sx + 60, sy + 170))
+        c.blit(F(21, True).render(f'{round(self.slider.value * 100)}%', True, (200, 100, 30)), (sx + 505, sy + 105))
+
+        c.blit(lab.render('电脑难度', True, TEXT_DARK), (sx + 60, sy + 152))
         for lv, b in self.level_btns:
             b.color = (230, 120, 30) if lv == self.settings['difficulty'] else (150, 155, 165)
             b.draw(c, mouse)
-        blit_center(c, tip.render(LEVEL_TIPS[self.settings['difficulty']], True, (140, 120, 100)),
-                    (W / 2, sy + 268))
-        c.blit(lab.render('显示模式', True, TEXT_DARK), (sx + 60, sy + 300))
+        blit_center(c, tip.render(LEVEL_TIPS[self.settings['difficulty']], True, tip_col), (W / 2, sy + 245))
+
+        c.blit(lab.render('显示模式', True, TEXT_DARK), (sx + 60, sy + 262))
         for mode, b in self.mode_btns:
             b.color = (230, 120, 30) if mode == self.settings['display'] else (150, 155, 165)
             b.draw(c, mouse)
-        blit_center(c, tip.render(MODE_TIPS[self.settings['display']], True, (140, 120, 100)),
-                    (W / 2, sy + 398))
-        self.btn_back.draw(c, mouse)
+        blit_center(c, tip.render(MODE_TIPS[self.settings['display']], True, tip_col), (W / 2, sy + 355))
 
+        c.blit(lab.render('牌桌背景', True, TEXT_DARK), (sx + 60, sy + 378))
+        if 'custom' in self.thumbs:
+            self.btn_pick.draw(c, mouse)
+        names = dict((k, n) for k, n, _ in BG.PRESETS)
+        names['custom'] = '自定义'
+        for key, r in self.bg_tiles:
+            chosen = key == self.settings['background']
+            th = self.thumbs.get(key)
+            if th is not None:
+                c.blit(th, r)
+            else:
+                pygame.draw.rect(c, (225, 215, 195), r)
+                blit_center(c, F(30, True).render('+', True, (150, 130, 110)), (r.centerx, r.centery - 8))
+                blit_center(c, F(14).render('选择图片', True, (130, 110, 90)), (r.centerx, r.centery + 16))
+            border = (230, 120, 30) if chosen else (190, 175, 150)
+            if r.collidepoint(mouse) and not chosen:
+                border = (240, 170, 90)
+            pygame.draw.rect(c, border, r.inflate(6, 6), 4 if chosen else 2, border_radius=6)
+            blit_center(c, F(15, True).render(names[key], True, TEXT_DARK if chosen else tip_col),
+                        (r.centerx, r.bottom + 15))
+        msg = self.bg_msg
+        if msg and pygame.time.get_ticks() < msg[2]:
+            blit_center(c, tip.render(msg[0], True, msg[1]), (W / 2, sy + 520))
+        else:
+            blit_center(c, tip.render('点“自定义”可以用你电脑里的任意图片当牌桌', True, tip_col), (W / 2, sy + 520))
+        self.btn_back.draw(c, mouse)
 
 if __name__ == '__main__':
     App().run()
